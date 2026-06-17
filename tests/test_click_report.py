@@ -1,12 +1,23 @@
+import asyncio
 import csv
 import json
 import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
+from unittest.mock import AsyncMock, patch
 
-from click_report import QUERY_SQL, ClickCounts, count_click_records, parse_click_pattern
+from click_report import (
+    QUERY_SQL,
+    ClickCounts,
+    build_click_report,
+    count_click_records,
+    is_request_cache_current,
+    parse_click_pattern,
+    write_request_cache_meta,
+)
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -22,6 +33,92 @@ class ClickReportTest(unittest.TestCase):
     def test_query_sql_has_no_newline(self):
         self.assertNotIn("\n", QUERY_SQL)
         self.assertNotIn("\r", QUERY_SQL)
+
+    def test_request_cache_only_reuses_same_query_date(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            request_path = temp_path / "request.json"
+            meta_path = temp_path / "request_meta.json"
+            query_date = date(2026, 6, 17)
+
+            request_path.write_text('{"data":{"rows":[]}}', encoding="utf-8")
+            write_request_cache_meta(meta_path, query_date)
+
+            self.assertTrue(
+                is_request_cache_current(request_path, meta_path, query_date)
+            )
+            self.assertFalse(
+                is_request_cache_current(
+                    request_path,
+                    meta_path,
+                    date(2026, 6, 18),
+                )
+            )
+
+    def test_request_cache_rejects_incomplete_json(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            request_path = temp_path / "request.json"
+            meta_path = temp_path / "request_meta.json"
+            query_date = date(2026, 6, 17)
+
+            request_path.write_text('{"data":{"rows":[}', encoding="utf-8")
+            write_request_cache_meta(meta_path, query_date)
+
+            self.assertFalse(
+                is_request_cache_current(request_path, meta_path, query_date)
+            )
+
+    def test_build_click_report_reuses_same_day_request_json(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            request_path = temp_path / "request.json"
+            request_path.write_text('{"data":{"rows":[]}}', encoding="utf-8")
+            write_request_cache_meta(temp_path / "request_meta.json", date.today())
+
+            async def fake_extract(_pattern, _input_path, output_path):
+                with output_path.open("w", encoding="utf-8-sig", newline="") as file:
+                    writer = csv.DictWriter(file, fieldnames=["动作"])
+                    writer.writeheader()
+
+            with (
+                patch("click_report.fetch_event_log", new=AsyncMock()) as fetch_mock,
+                patch("click_report.run_extract_script", new=fake_extract),
+            ):
+                report = asyncio.run(build_click_report("ln.run/miTyN", temp_path))
+
+            fetch_mock.assert_not_awaited()
+            self.assertEqual(report.record_csv, temp_path / "record.csv")
+
+    def test_build_click_report_refreshes_next_day_request_json(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_path = Path(temp_dir)
+            request_path = temp_path / "request.json"
+            request_path.write_text('{"data":{"rows":[]}}', encoding="utf-8")
+            write_request_cache_meta(
+                temp_path / "request_meta.json",
+                date(2026, 6, 17),
+            )
+
+            async def fake_fetch(output_path):
+                output_path.write_text('{"data":{"rows":[]}}', encoding="utf-8")
+
+            async def fake_extract(_pattern, _input_path, output_path):
+                with output_path.open("w", encoding="utf-8-sig", newline="") as file:
+                    writer = csv.DictWriter(file, fieldnames=["动作"])
+                    writer.writeheader()
+
+            fetch_mock = AsyncMock(side_effect=fake_fetch)
+            with (
+                patch("click_report.date") as date_mock,
+                patch("click_report.fetch_event_log", new=fetch_mock),
+                patch("click_report.run_extract_script", new=fake_extract),
+            ):
+                date_mock.today.return_value = date(2026, 6, 18)
+                date_mock.side_effect = lambda *args, **kwargs: date(*args, **kwargs)
+                asyncio.run(build_click_report("ln.run/miTyN", temp_path))
+
+            fetch_mock.assert_awaited_once_with(request_path)
 
     def test_count_click_records(self):
         with tempfile.TemporaryDirectory() as temp_dir:

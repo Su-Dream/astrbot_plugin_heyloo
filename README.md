@@ -7,6 +7,7 @@
 - 支持 `/昨日点击 <URL片段>` 指令，例如 `/昨日点击 ln.run/miTyN`
 - 收到指令后先回复 `查询中`
 - 异步调用事件日志查询接口，支持较长等待时间
+- 同一天内复用已保存的 `request.json`，跨天自动重新查询并覆盖
 - 将接口原始响应保存为 `request.json`
 - 调用 `scripts/extract_url_records.py` 筛选成功和失败点击记录
 - 生成并发送 `record.csv`
@@ -45,7 +46,10 @@ data/plugin_data/HeylooBot/
 主要文件：
 
 - `request.json`：接口返回的原始响应
+- `request_meta.json`：记录 `request.json` 对应的查询日期
 - `record.csv`：按 URL 片段筛选后的点击明细
+
+例如 6 月 17 日查询的是 6 月 16 日数据，插件会在 6 月 17 日当天复用同一份 `request.json`；到了 6 月 18 日会重新查询 6 月 17 日数据并覆盖旧文件。
 
 如果本地测试环境无法读取 AstrBot 数据目录，插件会回退到项目内 `data/plugin_data/HeylooBot/`，该目录已加入 `.gitignore`。
 
