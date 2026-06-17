@@ -9,9 +9,11 @@ from datetime import date
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
-from click_report import (
+from models.click_report import (
+    OVERVIEW_SQL,
     QUERY_SQL,
     ClickCounts,
+    build_click_overview_from_payload,
     build_click_report,
     count_click_records,
     is_request_cache_current,
@@ -29,10 +31,43 @@ class ClickReportTest(unittest.TestCase):
         self.assertEqual(parse_click_pattern("/昨日点击 ln.run/miTyN"), "ln.run/miTyN")
         self.assertEqual(parse_click_pattern("昨日点击 ln.run/miTyN"), "ln.run/miTyN")
         self.assertEqual(parse_click_pattern("ln.run/miTyN"), "ln.run/miTyN")
+        self.assertEqual(parse_click_pattern("/昨日点击总览"), "/昨日点击总览")
 
     def test_query_sql_has_no_newline(self):
         self.assertNotIn("\n", QUERY_SQL)
         self.assertNotIn("\r", QUERY_SQL)
+        self.assertNotIn("\n", OVERVIEW_SQL)
+        self.assertNotIn("\r", OVERVIEW_SQL)
+
+    def test_build_click_overview_from_payload(self):
+        payload = {
+            "success": True,
+            "data": {
+                "rows": [
+                    {"action": "click-success", "count": "43920"},
+                    {"action": "click-fail", "count": "15568"},
+                    {"action": "click-fail-domain", "count": "12"},
+                ]
+            },
+            "message": "查询成功",
+        }
+
+        overview = build_click_overview_from_payload(payload, date(2026, 6, 17))
+
+        self.assertEqual(overview.period_start, "2026-06-16 00:00:00")
+        self.assertEqual(overview.period_end, "2026-06-17 00:00:00")
+        self.assertEqual(overview.total, 59500)
+        self.assertEqual(overview.success, 43920)
+        self.assertEqual(overview.fail, 15580)
+        self.assertEqual(overview.success_rate, "73.82%")
+        self.assertEqual(overview.fail_rate, "26.18%")
+
+    def test_build_click_overview_rejects_failed_payload(self):
+        with self.assertRaises(RuntimeError):
+            build_click_overview_from_payload(
+                {"success": False, "message": "查询失败"},
+                date(2026, 6, 17),
+            )
 
     def test_request_cache_only_reuses_same_query_date(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -82,8 +117,11 @@ class ClickReportTest(unittest.TestCase):
                     writer.writeheader()
 
             with (
-                patch("click_report.fetch_event_log", new=AsyncMock()) as fetch_mock,
-                patch("click_report.run_extract_script", new=fake_extract),
+                patch(
+                    "models.click_report.fetch_event_log",
+                    new=AsyncMock(),
+                ) as fetch_mock,
+                patch("models.click_report.run_extract_script", new=fake_extract),
             ):
                 report = asyncio.run(build_click_report("ln.run/miTyN", temp_path))
 
@@ -110,9 +148,9 @@ class ClickReportTest(unittest.TestCase):
 
             fetch_mock = AsyncMock(side_effect=fake_fetch)
             with (
-                patch("click_report.date") as date_mock,
-                patch("click_report.fetch_event_log", new=fetch_mock),
-                patch("click_report.run_extract_script", new=fake_extract),
+                patch("models.click_report.date") as date_mock,
+                patch("models.click_report.fetch_event_log", new=fetch_mock),
+                patch("models.click_report.run_extract_script", new=fake_extract),
             ):
                 date_mock.today.return_value = date(2026, 6, 18)
                 date_mock.side_effect = lambda *args, **kwargs: date(*args, **kwargs)

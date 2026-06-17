@@ -37,7 +37,7 @@ from astrbot.api.event import AstrMessageEvent, filter
 - 优先使用 `aiohttp`、`httpx` 等异步网络请求库。
 - 网络请求必须设置合理超时。
 - 大响应应避免一次性读入内存，优先流式写入文件。
-- 生产接口或长耗时接口需要考虑重试、兜底和用户可理解的错误提示。
+- 生产接口或长耗时接口需要考虑重试和用户可理解的错误提示。
 
 ## 测试与质量
 
@@ -47,7 +47,7 @@ from astrbot.api.event import AstrMessageEvent, filter
 
 ```bash
 python3 -m unittest discover -s "tests" -v
-python3 -m compileall "main.py" "click_report.py" "scripts/extract_url_records.py" "tests/test_click_report.py"
+python3 -m compileall "main.py" "models" "scripts/extract_url_records.py" "tests/test_click_report.py" "tests/test_queue_report.py"
 ```
 
 - 提交前使用 ruff 格式化代码：

@@ -5,6 +5,8 @@
 ## 功能
 
 - 支持 `/昨日点击 <URL片段>` 指令，例如 `/昨日点击 ln.run/miTyN`
+- 支持 `/昨日点击总览` 指令，返回昨日点击统计图片
+- 支持 `/当前队列` 指令，返回任务队列和事件队列统计图片
 - 收到指令后先回复 `查询中`
 - 异步调用事件日志查询接口，支持较长等待时间
 - 同一天内复用已保存的 `request.json`，跨天自动重新查询并覆盖
@@ -34,6 +36,22 @@
 ```
 
 同时发送 `record.csv` 文件。
+
+查看昨日整体点击统计：
+
+```text
+/昨日点击总览
+```
+
+插件会返回一张统计图片，包含统计周期、总数、成功数、失败数、成功率和失败率。
+
+查看当前队列：
+
+```text
+/当前队列
+```
+
+插件会返回一张统计图片，包含任务队列数量、事件队列数量和队列 Key。
 
 ## 数据文件
 
@@ -67,7 +85,7 @@ pip install -r requirements.txt
 
 ```bash
 python3 -m unittest discover -s "tests" -v
-python3 -m compileall "main.py" "click_report.py" "scripts/extract_url_records.py" "tests/test_click_report.py"
+python3 -m compileall "main.py" "models" "scripts/extract_url_records.py" "tests/test_click_report.py" "tests/test_queue_report.py"
 ```
 
 提交前建议使用 `ruff` 格式化代码：

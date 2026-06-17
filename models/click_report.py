@@ -16,6 +16,7 @@ SCRIPT_TIMEOUT_SECONDS = 120
 DOWNLOAD_RETRY_TIMES = 2
 DOWNLOAD_RETRY_INTERVAL_SECONDS = 2
 QUERY_SQL = "SELECT * FROM event_log WHERE action IN ('click-success', 'click-fail') AND event_time >= DATE_SUB(CURDATE(), INTERVAL 1 DAY) AND event_time < CURDATE() ORDER BY event_time DESC;"
+OVERVIEW_SQL = "SELECT action, COUNT(*) AS count FROM event_log WHERE action IN ( 'click-success', 'click-fail', 'click-fail-domain' ) AND created_at >= DATE_SUB(CURDATE(), INTERVAL 1 DAY) AND created_at < CURDATE() GROUP BY action ORDER BY count DESC;"
 REQUEST_HEADERS = {
     "User-Agent": "Apifox/1.0.0 (https://apifox.com)",
     "Content-Type": "application/json",
@@ -23,7 +24,7 @@ REQUEST_HEADERS = {
     "Host": "8.218.63.188:8181",
     "Connection": "keep-alive",
 }
-SCRIPT_PATH = Path(__file__).resolve().parent / "scripts" / "extract_url_records.py"
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "extract_url_records.py"
 REQUEST_JSON_NAME = "request.json"
 REQUEST_META_NAME = "request_meta.json"
 RECORD_CSV_NAME = "record.csv"
@@ -43,6 +44,17 @@ class ClickReport:
     counts: ClickCounts
 
 
+@dataclass(frozen=True)
+class ClickOverview:
+    period_start: str
+    period_end: str
+    total: int
+    success: int
+    fail: int
+    success_rate: str
+    fail_rate: str
+
+
 def get_plugin_data_dir(plugin_name: str = PLUGIN_NAME) -> Path:
     """返回 AstrBot 规范插件数据目录，测试环境缺少 AstrBot 时回退到本地 data。"""
     try:
@@ -50,7 +62,7 @@ def get_plugin_data_dir(plugin_name: str = PLUGIN_NAME) -> Path:
 
         data_root = Path(get_astrbot_data_path())
     except Exception:
-        data_root = Path(__file__).resolve().parent / "data"
+        data_root = Path(__file__).resolve().parents[1] / "data"
 
     return data_root / "plugin_data" / plugin_name
 
@@ -59,8 +71,12 @@ def parse_click_pattern(message: str) -> str:
     """从 /昨日点击 命令中提取 URL 片段。"""
     text = message.strip()
     for prefix in ("/昨日点击", "昨日点击"):
-        if text.startswith(prefix):
+        if text == prefix:
+            return ""
+
+        if text.startswith(prefix + " "):
             return text[len(prefix) :].strip()
+
     return text
 
 
@@ -114,6 +130,57 @@ def replace_downloaded_file(temp_path: Path, output_path: Path) -> None:
     temp_path.replace(output_path)
 
 
+def parse_count(value: object) -> int:
+    """将接口返回的字符串或数字计数安全转换为整数。"""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def build_click_overview_from_payload(
+    payload: dict[str, object],
+    query_date: date,
+) -> ClickOverview:
+    """解析总览接口响应，生成图片模板所需的数据。"""
+    if not payload.get("success", False):
+        message = payload.get("message", "查询失败")
+        raise RuntimeError(str(message))
+
+    data = payload.get("data", {})
+    rows = data.get("rows", []) if isinstance(data, dict) else []
+    if not isinstance(rows, list):
+        raise RuntimeError("总览接口返回数据格式错误")
+
+    action_counts: dict[str, int] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+
+        action = str(row.get("action", ""))
+        action_counts[action] = parse_count(row.get("count", 0))
+
+    success = action_counts.get("click-success", 0)
+    fail = action_counts.get("click-fail", 0) + action_counts.get(
+        "click-fail-domain",
+        0,
+    )
+    total = sum(action_counts.values())
+    success_rate = (success / total * 100) if total else 0
+    fail_rate = (fail / total * 100) if total else 0
+    target_date = query_date - timedelta(days=1)
+
+    return ClickOverview(
+        period_start=f"{target_date.isoformat()} 00:00:00",
+        period_end=f"{query_date.isoformat()} 00:00:00",
+        total=total,
+        success=success,
+        fail=fail,
+        success_rate=f"{success_rate:.2f}%",
+        fail_rate=f"{fail_rate:.2f}%",
+    )
+
+
 async def fetch_event_log(output_path: Path) -> None:
     """调用查询接口并保存原始 JSON，失败时保留旧缓存文件。"""
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -135,17 +202,38 @@ async def fetch_event_log(output_path: Path) -> None:
             if attempt < DOWNLOAD_RETRY_TIMES:
                 await asyncio.sleep(DOWNLOAD_RETRY_INTERVAL_SECONDS)
 
-    try:
-        await fetch_event_log_with_curl(temp_path)
-        replace_downloaded_file(temp_path, output_path)
-        return
-    except Exception as exc:
-        if is_valid_json_file(temp_path):
-            temp_path.replace(output_path)
-            return
+    raise RuntimeError("接口查询失败：" + "；".join(errors))
 
-        errors.append(f"curl兜底失败：{exc}")
-        temp_path.unlink(missing_ok=True)
+
+async def fetch_query_json(sql: str) -> dict[str, object]:
+    """调用查询接口并返回 JSON 响应。"""
+    try:
+        import aiohttp
+    except ImportError as exc:
+        raise RuntimeError("缺少 aiohttp 依赖，请先安装 requirements.txt") from exc
+
+    errors: list[str] = []
+    timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT_SECONDS)
+    payload = {"sql": sql}
+
+    for attempt in range(1, DOWNLOAD_RETRY_TIMES + 1):
+        try:
+            async with aiohttp.ClientSession(
+                timeout=timeout,
+                headers=REQUEST_HEADERS,
+            ) as session:
+                async with session.post(API_URL, json=payload) as response:
+                    response.raise_for_status()
+                    text = await response.text()
+                    parsed = json.loads(text)
+                    if not isinstance(parsed, dict):
+                        raise RuntimeError("接口返回数据格式错误")
+
+                    return parsed
+        except Exception as exc:
+            errors.append(f"aiohttp第{attempt}次失败：{exc}")
+            if attempt < DOWNLOAD_RETRY_TIMES:
+                await asyncio.sleep(DOWNLOAD_RETRY_INTERVAL_SECONDS)
 
     raise RuntimeError("接口查询失败：" + "；".join(errors))
 
@@ -166,60 +254,6 @@ async def fetch_event_log_with_aiohttp(output_path: Path) -> None:
             with output_path.open("wb") as file:
                 async for chunk in response.content.iter_chunked(1024 * 1024):
                     file.write(chunk)
-
-
-async def fetch_event_log_with_curl(output_path: Path) -> None:
-    """用 curl 兜底处理服务端提前断开或长度头不准确的响应。"""
-    payload = json.dumps({"sql": QUERY_SQL}, ensure_ascii=False)
-    command = [
-        "curl",
-        "--location",
-        "--request",
-        "POST",
-        API_URL,
-        "--max-time",
-        str(REQUEST_TIMEOUT_SECONDS),
-        "--connect-timeout",
-        "30",
-        "--silent",
-        "--show-error",
-        "--ignore-content-length",
-        "--output",
-        str(output_path),
-        "--write-out",
-        "%{http_code}",
-    ]
-
-    for name, value in REQUEST_HEADERS.items():
-        command.extend(["--header", f"{name}: {value}"])
-
-    command.extend(["--data-raw", payload])
-
-    process = await asyncio.create_subprocess_exec(
-        *command,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-
-    try:
-        stdout, stderr = await asyncio.wait_for(
-            process.communicate(),
-            timeout=REQUEST_TIMEOUT_SECONDS + 30,
-        )
-    except asyncio.TimeoutError as exc:
-        process.kill()
-        await process.communicate()
-        raise RuntimeError("curl下载响应超时") from exc
-
-    status_text = stdout.decode("utf-8", errors="replace").strip()
-    if status_text and status_text.isdigit():
-        status_code = int(status_text)
-        if status_code < 200 or status_code >= 300:
-            raise RuntimeError(f"接口返回HTTP {status_code}")
-
-    if process.returncode != 0 and not is_valid_json_file(output_path):
-        detail = stderr.decode("utf-8", errors="replace").strip()
-        raise RuntimeError(detail or f"curl退出码 {process.returncode}")
 
 
 async def run_extract_script(
@@ -294,3 +328,9 @@ async def build_click_report(pattern: str, data_dir: Path) -> ClickReport:
         record_csv=record_csv,
         counts=counts,
     )
+
+
+async def build_click_overview() -> ClickOverview:
+    """查询昨日点击总览并整理为图片模板数据。"""
+    payload = await fetch_query_json(OVERVIEW_SQL)
+    return build_click_overview_from_payload(payload, date.today())
