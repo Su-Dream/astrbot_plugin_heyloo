@@ -1,6 +1,7 @@
 import unittest
 
 from models.queue_report import (
+    QUEUE_HEADERS,
     QueueItem,
     QueueMetrics,
     build_queue_metrics_from_payload,
@@ -9,6 +10,9 @@ from models.queue_report import (
 
 
 class QueueReportTest(unittest.TestCase):
+    def test_queue_headers(self):
+        self.assertEqual(QUEUE_HEADERS["X-Forwarded-For"], "127.0.0.1")
+
     def test_parse_queue_size(self):
         self.assertEqual(parse_queue_size("12292"), 12292)
         self.assertEqual(parse_queue_size(397), 397)

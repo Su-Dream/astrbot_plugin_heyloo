@@ -8,6 +8,9 @@ QUEUE_METRICS_URL = "http://43.98.192.252:8991/queue-metrics"
 QUEUE_TIMEOUT_SECONDS = 30
 QUEUE_RETRY_TIMES = 2
 QUEUE_RETRY_INTERVAL_SECONDS = 1
+QUEUE_HEADERS = {
+    "X-Forwarded-For": "127.0.0.1",
+}
 
 
 @dataclass(frozen=True)
@@ -75,7 +78,10 @@ async def fetch_queue_metrics_payload() -> dict[str, object]:
 
     for attempt in range(1, QUEUE_RETRY_TIMES + 1):
         try:
-            async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with aiohttp.ClientSession(
+                timeout=timeout,
+                headers=QUEUE_HEADERS,
+            ) as session:
                 async with session.get(QUEUE_METRICS_URL) as response:
                     response.raise_for_status()
                     payload = await response.json()
