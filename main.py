@@ -13,6 +13,11 @@ try:
         get_plugin_data_dir,
         parse_click_pattern,
     )
+    from .models.image_options import (
+        OVERVIEW_IMAGE_HEIGHT,
+        QUEUE_IMAGE_HEIGHT,
+        build_image_options,
+    )
     from .models.queue_report import build_queue_metrics
 except ImportError:  # pragma: no cover - 兼容 AstrBot 以脚本方式加载插件
     from models.click_report import (
@@ -22,10 +27,12 @@ except ImportError:  # pragma: no cover - 兼容 AstrBot 以脚本方式加载�
         get_plugin_data_dir,
         parse_click_pattern,
     )
+    from models.image_options import (
+        OVERVIEW_IMAGE_HEIGHT,
+        QUEUE_IMAGE_HEIGHT,
+        build_image_options,
+    )
     from models.queue_report import build_queue_metrics
-
-
-BASE_IMAGE_OPTIONS = {"type": "png", "full_page": True}
 
 
 OVERVIEW_TEMPLATE = """
@@ -144,9 +151,14 @@ class HeylooBotPlugin(Star):
         """插件初始化时准备数据目录。"""
         self._data_dir.mkdir(parents=True, exist_ok=True)
 
-    async def render_image(self, template: str, data: dict[str, object]) -> str:
+    async def render_image(
+        self,
+        template: str,
+        data: dict[str, object],
+        height: int,
+    ) -> str:
         """使用 AstrBot HTML 渲染能力生成图片 URL。"""
-        return await self.html_render(template, data, options=BASE_IMAGE_OPTIONS)
+        return await self.html_render(template, data, options=build_image_options(height))
 
     @filter.command("昨日点击")
     async def yesterday_clicks(self, event: AstrMessageEvent):
@@ -196,6 +208,7 @@ class HeylooBotPlugin(Star):
                         "success_rate": overview.success_rate,
                         "fail_rate": overview.fail_rate,
                     },
+                    OVERVIEW_IMAGE_HEIGHT,
                 )
         except Exception as exc:
             logger.exception(f"昨日点击总览查询失败: {exc}")
@@ -220,6 +233,7 @@ class HeylooBotPlugin(Star):
                     "event_queue_key": metrics.event_queue.key,
                     "event_queue_size": metrics.event_queue.size,
                 },
+                QUEUE_IMAGE_HEIGHT,
             )
         except Exception as exc:
             logger.exception(f"当前队列查询失败: {exc}")

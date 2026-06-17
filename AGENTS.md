@@ -47,7 +47,7 @@ from astrbot.api.event import AstrMessageEvent, filter
 
 ```bash
 python3 -m unittest discover -s "tests" -v
-python3 -m compileall "main.py" "models" "scripts/extract_url_records.py" "tests/test_click_report.py" "tests/test_queue_report.py"
+python3 -m compileall "main.py" "models" "scripts/extract_url_records.py" "tests/test_click_report.py" "tests/test_image_options.py" "tests/test_queue_report.py"
 ```
 
 - 提交前使用 ruff 格式化代码：
