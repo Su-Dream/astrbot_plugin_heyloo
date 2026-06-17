@@ -18,7 +18,9 @@ try:
         QUEUE_IMAGE_HEIGHT,
         build_image_options,
     )
+    from .models.plugin_config import is_image_response_enabled
     from .models.queue_report import build_queue_metrics
+    from .models.response_text import format_click_overview_text, format_queue_metrics_text
 except ImportError:  # pragma: no cover - 兼容 AstrBot 以脚本方式加载插件
     from models.click_report import (
         PLUGIN_NAME,
@@ -32,7 +34,9 @@ except ImportError:  # pragma: no cover - 兼容 AstrBot 以脚本方式加载�
         QUEUE_IMAGE_HEIGHT,
         build_image_options,
     )
+    from models.plugin_config import is_image_response_enabled
     from models.queue_report import build_queue_metrics
+    from models.response_text import format_click_overview_text, format_queue_metrics_text
 
 
 OVERVIEW_TEMPLATE = """
@@ -142,8 +146,9 @@ QUEUE_TEMPLATE = """
 
 @register("HeylooBot", "raphitaria", "海络云运营查询插件", "1.1")
 class HeylooBotPlugin(Star):
-    def __init__(self, context: Context):
+    def __init__(self, context: Context, config=None):
         super().__init__(context)
+        self._config = config
         self._query_lock = asyncio.Lock()
         self._data_dir = get_plugin_data_dir(PLUGIN_NAME)
 
@@ -159,6 +164,10 @@ class HeylooBotPlugin(Star):
     ) -> str:
         """使用 AstrBot HTML 渲染能力生成图片 URL。"""
         return await self.html_render(template, data, options=build_image_options(height))
+
+    def image_response_enabled(self) -> bool:
+        """读取当前插件配置中的图片回复开关。"""
+        return is_image_response_enabled(self._config)
 
     @filter.command("昨日点击")
     async def yesterday_clicks(self, event: AstrMessageEvent):
@@ -197,6 +206,10 @@ class HeylooBotPlugin(Star):
         try:
             async with self._query_lock:
                 overview = await build_click_overview()
+                if not self.image_response_enabled():
+                    yield event.plain_result(format_click_overview_text(overview))
+                    return
+
                 image_url = await self.render_image(
                     OVERVIEW_TEMPLATE,
                     {
@@ -224,6 +237,10 @@ class HeylooBotPlugin(Star):
 
         try:
             metrics = await build_queue_metrics()
+            if not self.image_response_enabled():
+                yield event.plain_result(format_queue_metrics_text(metrics))
+                return
+
             image_url = await self.render_image(
                 QUEUE_TEMPLATE,
                 {

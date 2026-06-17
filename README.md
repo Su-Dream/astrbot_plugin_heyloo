@@ -53,6 +53,12 @@
 
 插件会返回一张统计图片，包含任务队列数量、事件队列数量和队列 Key。
 
+## 配置
+
+插件支持在 AstrBot 管理面板中配置：
+
+- `enable_image_response`：是否启用图片回复，默认开启。关闭后，`/昨日点击总览` 和 `/当前队列` 只返回纯文本，不返回图片。
+
 ## 数据文件
 
 运行数据优先写入 AstrBot 数据目录：
@@ -85,7 +91,7 @@ pip install -r requirements.txt
 
 ```bash
 python3 -m unittest discover -s "tests" -v
-python3 -m compileall "main.py" "models" "scripts/extract_url_records.py" "tests/test_click_report.py" "tests/test_image_options.py" "tests/test_queue_report.py"
+python3 -m compileall "main.py" "models" "scripts/extract_url_records.py" "tests/test_click_report.py" "tests/test_image_options.py" "tests/test_plugin_config.py" "tests/test_queue_report.py" "tests/test_response_text.py"
 ```
 
 提交前建议使用 `ruff` 格式化代码：

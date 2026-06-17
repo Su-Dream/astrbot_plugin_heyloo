@@ -1,0 +1,8 @@
+{
+  "enable_image_response": {
+    "description": "启用图片回复",
+    "type": "bool",
+    "hint": "关闭后，/昨日点击总览 和 /当前队列 只返回纯文本，不调用 HTML 转图片。",
+    "default": true
+  }
+}
