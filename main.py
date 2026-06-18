@@ -177,8 +177,6 @@ class HeylooBotPlugin(Star):
             yield event.plain_result("请按格式输入：/昨日点击 ln.run/miTyN")
             return
 
-        yield event.plain_result("查询中")
-
         try:
             async with self._query_lock:
                 report = await build_click_report(pattern, self._data_dir)
@@ -201,8 +199,6 @@ class HeylooBotPlugin(Star):
     @filter.command("昨日点击总览")
     async def yesterday_clicks_overview(self, event: AstrMessageEvent):
         """查询昨日点击成功和失败总览，并以图片形式回复。"""
-        yield event.plain_result("查询中")
-
         try:
             async with self._query_lock:
                 overview = await build_click_overview()
@@ -233,8 +229,6 @@ class HeylooBotPlugin(Star):
     @filter.command("当前队列")
     async def current_queue(self, event: AstrMessageEvent):
         """查询当前任务队列和事件队列，并以图片形式回复。"""
-        yield event.plain_result("查询中")
-
         try:
             metrics = await build_queue_metrics()
             if not self.image_response_enabled():
