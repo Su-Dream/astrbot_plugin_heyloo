@@ -1,6 +1,5 @@
 IMAGE_RESPONSE_CONFIG_KEY = "enable_image_response"
 EVENT_API_BASE_URL_CONFIG_KEY = "event_api_base_url"
-QUEUE_API_BASE_URL_CONFIG_KEY = "queue_api_base_url"
 DEFAULT_EVENT_API_BASE_URL = "http://8.218.63.188:8181"
 
 
@@ -59,11 +58,6 @@ def get_event_api_base_url(config: object) -> str:
             DEFAULT_EVENT_API_BASE_URL,
         )
     )
-
-
-def get_queue_api_base_url(config: object) -> str:
-    """读取队列服务器基础地址。"""
-    return normalize_base_url(get_config_value(config, QUEUE_API_BASE_URL_CONFIG_KEY))
 
 
 def require_configured_url(url: str, label: str) -> str:

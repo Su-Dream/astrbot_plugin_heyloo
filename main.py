@@ -19,11 +19,10 @@ try:
     )
     from .models.plugin_config import (
         get_event_api_base_url,
-        get_queue_api_base_url,
         is_image_response_enabled,
         require_configured_url,
     )
-    from .models.queue_report import build_queue_metrics
+    from .models.queue_report import build_queue_metrics_report
     from .models.response_text import format_click_overview_text, format_queue_metrics_text
 except ImportError:  # pragma: no cover - 兼容 AstrBot 以脚本方式加载插件
     from models.click_report import (
@@ -40,11 +39,10 @@ except ImportError:  # pragma: no cover - 兼容 AstrBot 以脚本方式加载�
     )
     from models.plugin_config import (
         get_event_api_base_url,
-        get_queue_api_base_url,
         is_image_response_enabled,
         require_configured_url,
     )
-    from models.queue_report import build_queue_metrics
+    from models.queue_report import build_queue_metrics_report
     from models.response_text import format_click_overview_text, format_queue_metrics_text
 
 
@@ -125,22 +123,45 @@ QUEUE_TEMPLATE = """
       <div><strong>总队列数：</strong>{{ total }}</div>
     </div>
     <div style="height: 1px; background: #e5e7eb; margin: 16px 0 14px;"></div>
-    <div style="display: grid; grid-template-columns: 1fr 1fr; row-gap: 12px; column-gap: 32px; font-size: 14px;">
+    <div style="display: grid; grid-template-columns: 1fr 1fr; row-gap: 12px; column-gap: 24px; font-size: 14px;">
       <div>
-        <div style="font-weight: 700; margin-bottom: 4px;">任务队列数量</div>
-        <div>{{ task_queue_size }}</div>
+        <div style="font-weight: 700; margin-bottom: 4px;">{{ server_1_name }}</div>
+        <div style="color: #6b7280; font-size: 12px; word-break: break-all;">{{ server_1_url }}</div>
       </div>
       <div>
-        <div style="font-weight: 700; margin-bottom: 4px;">任务队列 Key</div>
-        <div>{{ task_queue_key }}</div>
+        <div style="font-weight: 700; margin-bottom: 4px;">队列总数</div>
+        <div>{{ server_1_total }}</div>
       </div>
       <div>
         <div style="font-weight: 700; margin-bottom: 4px;">事件队列数量</div>
-        <div>{{ event_queue_size }}</div>
+        <div>{{ server_1_event_queue_size }}</div>
+        <div style="color: #6b7280; font-size: 12px; word-break: break-all;">{{ server_1_event_queue_key }}</div>
       </div>
       <div>
-        <div style="font-weight: 700; margin-bottom: 4px;">事件队列 Key</div>
-        <div>{{ event_queue_key }}</div>
+        <div style="font-weight: 700; margin-bottom: 4px;">任务队列数量</div>
+        <div>{{ server_1_task_queue_size }}</div>
+        <div style="color: #6b7280; font-size: 12px; word-break: break-all;">{{ server_1_task_queue_key }}</div>
+      </div>
+    </div>
+    <div style="height: 1px; background: #e5e7eb; margin: 14px 0;"></div>
+    <div style="display: grid; grid-template-columns: 1fr 1fr; row-gap: 12px; column-gap: 24px; font-size: 14px;">
+      <div>
+        <div style="font-weight: 700; margin-bottom: 4px;">{{ server_2_name }}</div>
+        <div style="color: #6b7280; font-size: 12px; word-break: break-all;">{{ server_2_url }}</div>
+      </div>
+      <div>
+        <div style="font-weight: 700; margin-bottom: 4px;">队列总数</div>
+        <div>{{ server_2_total }}</div>
+      </div>
+      <div>
+        <div style="font-weight: 700; margin-bottom: 4px;">事件队列数量</div>
+        <div>{{ server_2_event_queue_size }}</div>
+        <div style="color: #6b7280; font-size: 12px; word-break: break-all;">{{ server_2_event_queue_key }}</div>
+      </div>
+      <div>
+        <div style="font-weight: 700; margin-bottom: 4px;">任务队列数量</div>
+        <div>{{ server_2_task_queue_size }}</div>
+        <div style="color: #6b7280; font-size: 12px; word-break: break-all;">{{ server_2_task_queue_key }}</div>
       </div>
     </div>
     <div style="color: #6b7280; font-size: 13px; margin-top: 20px;">
@@ -183,13 +204,6 @@ class HeylooBotPlugin(Star):
             "打点服务器地址",
         )
 
-    def queue_api_base_url(self) -> str:
-        """读取队列服务器基础地址。"""
-        return require_configured_url(
-            get_queue_api_base_url(self._config),
-            "队列服务器地址",
-        )
-
     @filter.command("昨日点击")
     async def yesterday_clicks(self, event: AstrMessageEvent):
         """查询指定短链昨日请求数和成功数。"""
@@ -211,7 +225,7 @@ class HeylooBotPlugin(Star):
 
         yield event.plain_result(
             f"{report.url} 在 {report.period_start} 到 {report.period_end} "
-            f"内有 {report.request_total} 个请求，成功 {report.success_total} 个"
+            f"成功 {report.success_total} 个"
         )
 
     @filter.command("点击查询")
@@ -238,7 +252,7 @@ class HeylooBotPlugin(Star):
 
         yield event.plain_result(
             f"{report.url} 在 {report.period_start} 到 {report.period_end} "
-            f"内有 {report.request_total} 个请求，成功 {report.success_total} 个"
+            f"成功 {report.success_total} 个"
         )
 
     @filter.command("昨日点击总览")
@@ -275,19 +289,30 @@ class HeylooBotPlugin(Star):
     async def current_queue(self, event: AstrMessageEvent):
         """查询当前任务队列和事件队列，并以图片形式回复。"""
         try:
-            metrics = await build_queue_metrics(self.queue_api_base_url())
+            report = await build_queue_metrics_report()
             if not self.image_response_enabled():
-                yield event.plain_result(format_queue_metrics_text(metrics))
+                yield event.plain_result(format_queue_metrics_text(report))
                 return
 
+            server_1, server_2 = report.servers
             image_url = await self.render_image(
                 QUEUE_TEMPLATE,
                 {
-                    "total": metrics.total,
-                    "task_queue_key": metrics.task_queue.key,
-                    "task_queue_size": metrics.task_queue.size,
-                    "event_queue_key": metrics.event_queue.key,
-                    "event_queue_size": metrics.event_queue.size,
+                    "total": report.total,
+                    "server_1_name": server_1.name,
+                    "server_1_url": server_1.base_url,
+                    "server_1_total": server_1.metrics.total,
+                    "server_1_task_queue_key": server_1.metrics.task_queue.key,
+                    "server_1_task_queue_size": server_1.metrics.task_queue.size,
+                    "server_1_event_queue_key": server_1.metrics.event_queue.key,
+                    "server_1_event_queue_size": server_1.metrics.event_queue.size,
+                    "server_2_name": server_2.name,
+                    "server_2_url": server_2.base_url,
+                    "server_2_total": server_2.metrics.total,
+                    "server_2_task_queue_key": server_2.metrics.task_queue.key,
+                    "server_2_task_queue_size": server_2.metrics.task_queue.size,
+                    "server_2_event_queue_key": server_2.metrics.event_queue.key,
+                    "server_2_event_queue_size": server_2.metrics.event_queue.size,
                 },
                 QUEUE_IMAGE_HEIGHT,
             )

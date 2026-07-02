@@ -5,12 +5,6 @@
     "hint": "例如 http://8.218.63.188:8181，插件会自动请求 /api/query。可按部署环境改为内网或本机地址。",
     "default": "http://8.218.63.188:8181"
   },
-  "queue_api_base_url": {
-    "description": "队列服务器地址",
-    "type": "string",
-    "hint": "例如 http://127.0.0.1:8991，插件会自动请求 /queue-metrics。请配置内网或本机地址，不要暴露公网地址。",
-    "default": ""
-  },
   "enable_image_response": {
     "description": "启用图片回复",
     "type": "bool",

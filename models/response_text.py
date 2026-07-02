@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from .click_report import ClickOverview
-from .queue_report import QueueMetrics
+from .queue_report import QueueMetricsReport
 
 
 def format_click_overview_text(overview: ClickOverview) -> str:
@@ -20,16 +20,22 @@ def format_click_overview_text(overview: ClickOverview) -> str:
     )
 
 
-def format_queue_metrics_text(metrics: QueueMetrics) -> str:
+def format_queue_metrics_text(report: QueueMetricsReport) -> str:
     """格式化当前队列纯文本回复。"""
-    return "\n".join(
-        [
-            "当前队列统计通知",
-            f"总队列数：{metrics.total}",
-            f"任务队列数量：{metrics.task_queue.size}",
-            f"任务队列 Key：{metrics.task_queue.key}",
-            f"事件队列数量：{metrics.event_queue.size}",
-            f"事件队列 Key：{metrics.event_queue.key}",
-            "数据来源：queue-metrics 当前队列指标",
-        ]
-    )
+    lines = [
+        "当前队列统计通知",
+        f"总队列数：{report.total}",
+    ]
+    for server in report.servers:
+        lines.extend(
+            [
+                f"{server.name}：{server.base_url}",
+                f"任务队列数量：{server.metrics.task_queue.size}",
+                f"任务队列 Key：{server.metrics.task_queue.key}",
+                f"事件队列数量：{server.metrics.event_queue.size}",
+                f"事件队列 Key：{server.metrics.event_queue.key}",
+            ]
+        )
+
+    lines.append("数据来源：queue-metrics 当前队列指标")
+    return "\n".join(lines)

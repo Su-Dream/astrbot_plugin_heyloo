@@ -1,7 +1,12 @@
 import unittest
 
 from models.click_report import ClickOverview
-from models.queue_report import QueueItem, QueueMetrics
+from models.queue_report import (
+    QueueItem,
+    QueueMetrics,
+    QueueMetricsReport,
+    QueueServerMetrics,
+)
 from models.response_text import format_click_overview_text, format_queue_metrics_text
 
 
@@ -26,16 +31,42 @@ class ResponseTextTest(unittest.TestCase):
 
     def test_format_queue_metrics_text(self):
         text = format_queue_metrics_text(
-            QueueMetrics(
-                task_queue=QueueItem(
-                    name="任务队列",
-                    key="proxy:queue:headed",
-                    size=13859,
-                ),
-                event_queue=QueueItem(
-                    name="事件队列",
-                    key="proxy:event:queue",
-                    size=196,
+            QueueMetricsReport(
+                servers=(
+                    QueueServerMetrics(
+                        name="服务器1",
+                        base_url="http://43.98.192.252:8991",
+                        metrics=QueueMetrics(
+                            task_queue=QueueItem(
+                                name="任务队列",
+                                key="proxy:queue:headed",
+                                size=13859,
+                            ),
+                            event_queue=QueueItem(
+                                name="事件队列",
+                                key="proxy:event:queue",
+                                size=196,
+                            ),
+                            total=14055,
+                        ),
+                    ),
+                    QueueServerMetrics(
+                        name="服务器2",
+                        base_url="http://154.217.241.177:8991",
+                        metrics=QueueMetrics(
+                            task_queue=QueueItem(
+                                name="任务队列",
+                                key="proxy:queue:headed",
+                                size=0,
+                            ),
+                            event_queue=QueueItem(
+                                name="事件队列",
+                                key="proxy:event:queue",
+                                size=0,
+                            ),
+                            total=0,
+                        ),
+                    ),
                 ),
                 total=14055,
             )
@@ -43,6 +74,8 @@ class ResponseTextTest(unittest.TestCase):
 
         self.assertIn("当前队列统计通知", text)
         self.assertIn("总队列数：14055", text)
+        self.assertIn("服务器1：http://43.98.192.252:8991", text)
+        self.assertIn("服务器2：http://154.217.241.177:8991", text)
         self.assertIn("任务队列 Key：proxy:queue:headed", text)
         self.assertIn("事件队列 Key：proxy:event:queue", text)
 
