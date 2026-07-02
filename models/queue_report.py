@@ -4,7 +4,7 @@ import asyncio
 from dataclasses import dataclass
 
 
-QUEUE_METRICS_URL = "http://43.98.192.252:8991/queue-metrics"
+QUEUE_METRICS_PATH = "/queue-metrics"
 QUEUE_TIMEOUT_SECONDS = 30
 QUEUE_RETRY_TIMES = 2
 QUEUE_RETRY_INTERVAL_SECONDS = 1
@@ -66,7 +66,12 @@ def build_queue_metrics_from_payload(payload: dict[str, object]) -> QueueMetrics
     )
 
 
-async def fetch_queue_metrics_payload() -> dict[str, object]:
+def build_queue_metrics_url(queue_api_base_url: str) -> str:
+    """拼接队列指标接口地址。"""
+    return f"{queue_api_base_url.rstrip('/')}{QUEUE_METRICS_PATH}"
+
+
+async def fetch_queue_metrics_payload(queue_api_base_url: str) -> dict[str, object]:
     """调用队列指标接口并返回 JSON 响应。"""
     try:
         import aiohttp
@@ -75,6 +80,7 @@ async def fetch_queue_metrics_payload() -> dict[str, object]:
 
     errors: list[str] = []
     timeout = aiohttp.ClientTimeout(total=QUEUE_TIMEOUT_SECONDS)
+    metrics_url = build_queue_metrics_url(queue_api_base_url)
 
     for attempt in range(1, QUEUE_RETRY_TIMES + 1):
         try:
@@ -82,7 +88,7 @@ async def fetch_queue_metrics_payload() -> dict[str, object]:
                 timeout=timeout,
                 headers=QUEUE_HEADERS,
             ) as session:
-                async with session.get(QUEUE_METRICS_URL) as response:
+                async with session.get(metrics_url) as response:
                     response.raise_for_status()
                     payload = await response.json()
                     if not isinstance(payload, dict):
@@ -97,7 +103,7 @@ async def fetch_queue_metrics_payload() -> dict[str, object]:
     raise RuntimeError("队列指标查询失败：" + "；".join(errors))
 
 
-async def build_queue_metrics() -> QueueMetrics:
+async def build_queue_metrics(queue_api_base_url: str) -> QueueMetrics:
     """查询当前队列指标并整理为图片模板数据。"""
-    payload = await fetch_queue_metrics_payload()
+    payload = await fetch_queue_metrics_payload(queue_api_base_url)
     return build_queue_metrics_from_payload(payload)

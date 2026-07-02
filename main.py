@@ -1,40 +1,49 @@
 import asyncio
 
-import astrbot.api.message_components as Comp
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 
 try:
     from .models.click_report import (
-        PLUGIN_NAME,
+        build_click_count_report,
         build_click_overview,
-        build_click_report,
-        get_plugin_data_dir,
-        parse_click_pattern,
+        build_yesterday_click_count_report,
+        parse_click_query_args,
+        parse_yesterday_click_url,
     )
     from .models.image_options import (
         OVERVIEW_IMAGE_HEIGHT,
         QUEUE_IMAGE_HEIGHT,
         build_image_options,
     )
-    from .models.plugin_config import is_image_response_enabled
+    from .models.plugin_config import (
+        get_event_api_base_url,
+        get_queue_api_base_url,
+        is_image_response_enabled,
+        require_configured_url,
+    )
     from .models.queue_report import build_queue_metrics
     from .models.response_text import format_click_overview_text, format_queue_metrics_text
 except ImportError:  # pragma: no cover - 兼容 AstrBot 以脚本方式加载插件
     from models.click_report import (
-        PLUGIN_NAME,
+        build_click_count_report,
         build_click_overview,
-        build_click_report,
-        get_plugin_data_dir,
-        parse_click_pattern,
+        build_yesterday_click_count_report,
+        parse_click_query_args,
+        parse_yesterday_click_url,
     )
     from models.image_options import (
         OVERVIEW_IMAGE_HEIGHT,
         QUEUE_IMAGE_HEIGHT,
         build_image_options,
     )
-    from models.plugin_config import is_image_response_enabled
+    from models.plugin_config import (
+        get_event_api_base_url,
+        get_queue_api_base_url,
+        is_image_response_enabled,
+        require_configured_url,
+    )
     from models.queue_report import build_queue_metrics
     from models.response_text import format_click_overview_text, format_queue_metrics_text
 
@@ -150,11 +159,9 @@ class HeylooBotPlugin(Star):
         super().__init__(context)
         self._config = config
         self._query_lock = asyncio.Lock()
-        self._data_dir = get_plugin_data_dir(PLUGIN_NAME)
 
     async def initialize(self):
-        """插件初始化时准备数据目录。"""
-        self._data_dir.mkdir(parents=True, exist_ok=True)
+        """插件初始化。"""
 
     async def render_image(
         self,
@@ -169,31 +176,69 @@ class HeylooBotPlugin(Star):
         """读取当前插件配置中的图片回复开关。"""
         return is_image_response_enabled(self._config)
 
+    def event_api_base_url(self) -> str:
+        """读取打点服务器基础地址。"""
+        return require_configured_url(
+            get_event_api_base_url(self._config),
+            "打点服务器地址",
+        )
+
+    def queue_api_base_url(self) -> str:
+        """读取队列服务器基础地址。"""
+        return require_configured_url(
+            get_queue_api_base_url(self._config),
+            "队列服务器地址",
+        )
+
     @filter.command("昨日点击")
     async def yesterday_clicks(self, event: AstrMessageEvent):
-        """查询指定短链昨日成功和失败点击明细。"""
-        pattern = parse_click_pattern(event.message_str)
-        if not pattern:
+        """查询指定短链昨日请求数和成功数。"""
+        url = parse_yesterday_click_url(event.message_str)
+        if not url:
             yield event.plain_result("请按格式输入：/昨日点击 ln.run/miTyN")
             return
 
         try:
             async with self._query_lock:
-                report = await build_click_report(pattern, self._data_dir)
+                report = await build_yesterday_click_count_report(
+                    url,
+                    self.event_api_base_url(),
+                )
         except Exception as exc:
             logger.exception(f"昨日点击查询失败: {exc}")
             yield event.plain_result(f"查询失败：{exc}")
             return
 
-        summary = (
-            f"查找到{pattern}成功点击{report.counts.success}个,"
-            f"失败点击{report.counts.fail}个;点击明细如下"
+        yield event.plain_result(
+            f"{report.url} 在 {report.period_start} 到 {report.period_end} "
+            f"内有 {report.request_total} 个请求，成功 {report.success_total} 个"
         )
-        yield event.chain_result(
-            [
-                Comp.Plain(summary),
-                Comp.File(file=str(report.record_csv), name="record.csv"),
-            ]
+
+    @filter.command("点击查询")
+    async def query_clicks(self, event: AstrMessageEvent):
+        """按日期区间查询指定短链请求数和成功数。"""
+        try:
+            query_args = parse_click_query_args(event.message_str)
+        except ValueError as exc:
+            yield event.plain_result(str(exc))
+            return
+
+        try:
+            async with self._query_lock:
+                report = await build_click_count_report(
+                    query_args.url,
+                    query_args.start_date,
+                    query_args.end_date,
+                    self.event_api_base_url(),
+                )
+        except Exception as exc:
+            logger.exception(f"点击查询失败: {exc}")
+            yield event.plain_result(f"查询失败：{exc}")
+            return
+
+        yield event.plain_result(
+            f"{report.url} 在 {report.period_start} 到 {report.period_end} "
+            f"内有 {report.request_total} 个请求，成功 {report.success_total} 个"
         )
 
     @filter.command("昨日点击总览")
@@ -201,7 +246,7 @@ class HeylooBotPlugin(Star):
         """查询昨日点击成功和失败总览，并以图片形式回复。"""
         try:
             async with self._query_lock:
-                overview = await build_click_overview()
+                overview = await build_click_overview(self.event_api_base_url())
                 if not self.image_response_enabled():
                     yield event.plain_result(format_click_overview_text(overview))
                     return
@@ -230,7 +275,7 @@ class HeylooBotPlugin(Star):
     async def current_queue(self, event: AstrMessageEvent):
         """查询当前任务队列和事件队列，并以图片形式回复。"""
         try:
-            metrics = await build_queue_metrics()
+            metrics = await build_queue_metrics(self.queue_api_base_url())
             if not self.image_response_enabled():
                 yield event.plain_result(format_queue_metrics_text(metrics))
                 return

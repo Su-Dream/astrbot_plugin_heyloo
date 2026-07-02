@@ -1,47 +1,40 @@
 from __future__ import annotations
 
 import asyncio
-import csv
 import json
-import sys
 from dataclasses import dataclass
-from datetime import date, timedelta
-from pathlib import Path
+from datetime import date, datetime, timedelta
 
 
 PLUGIN_NAME = "HeylooBot"
-API_URL = "http://8.218.63.188:8181/api/query"
+QUERY_API_PATH = "/api/query"
 REQUEST_TIMEOUT_SECONDS = 300
-SCRIPT_TIMEOUT_SECONDS = 120
 DOWNLOAD_RETRY_TIMES = 2
 DOWNLOAD_RETRY_INTERVAL_SECONDS = 2
-QUERY_SQL = "SELECT * FROM event_log WHERE action IN ('click-success', 'click-fail') AND event_time >= DATE_SUB(CURDATE(), INTERVAL 1 DAY) AND event_time < CURDATE() ORDER BY event_time DESC;"
 OVERVIEW_SQL = "SELECT action, COUNT(*) AS count FROM event_log WHERE action IN ( 'click-success', 'click-fail', 'click-fail-domain' ) AND created_at >= DATE_SUB(CURDATE(), INTERVAL 1 DAY) AND created_at < CURDATE() GROUP BY action ORDER BY count DESC;"
 REQUEST_HEADERS = {
     "User-Agent": "Apifox/1.0.0 (https://apifox.com)",
     "Content-Type": "application/json",
     "Accept": "*/*",
-    "Host": "8.218.63.188:8181",
     "Connection": "keep-alive",
 }
-SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "extract_url_records.py"
-REQUEST_JSON_NAME = "request.json"
-REQUEST_META_NAME = "request_meta.json"
-RECORD_CSV_NAME = "record.csv"
+DATE_FORMAT = "%Y-%m-%d"
 
 
 @dataclass(frozen=True)
-class ClickCounts:
-    success: int = 0
-    fail: int = 0
+class ClickQueryArgs:
+    url: str
+    start_date: date
+    end_date: date
 
 
 @dataclass(frozen=True)
-class ClickReport:
-    pattern: str
-    request_json: Path
-    record_csv: Path
-    counts: ClickCounts
+class ClickCountReport:
+    url: str
+    period_start: str
+    period_end: str
+    request_total: int
+    success_total: int
 
 
 @dataclass(frozen=True)
@@ -55,22 +48,10 @@ class ClickOverview:
     fail_rate: str
 
 
-def get_plugin_data_dir(plugin_name: str = PLUGIN_NAME) -> Path:
-    """返回 AstrBot 规范插件数据目录，测试环境缺少 AstrBot 时回退到本地 data。"""
-    try:
-        from astrbot.core.utils.astrbot_path import get_astrbot_data_path
-
-        data_root = Path(get_astrbot_data_path())
-    except Exception:
-        data_root = Path(__file__).resolve().parents[1] / "data"
-
-    return data_root / "plugin_data" / plugin_name
-
-
-def parse_click_pattern(message: str) -> str:
-    """从 /昨日点击 命令中提取 URL 片段。"""
+def parse_command_args(message: str, command: str) -> str:
+    """从命令消息中提取参数文本。"""
     text = message.strip()
-    for prefix in ("/昨日点击", "昨日点击"):
+    for prefix in (f"/{command}", command):
         if text == prefix:
             return ""
 
@@ -80,54 +61,33 @@ def parse_click_pattern(message: str) -> str:
     return text
 
 
-def is_valid_json_file(path: Path) -> bool:
-    """确认响应文件是完整 JSON，避免复用半截响应。"""
+def parse_yesterday_click_url(message: str) -> str:
+    """从 /昨日点击 命令中提取 URL。"""
+    return parse_command_args(message, "昨日点击")
+
+
+def parse_query_date(value: str) -> date:
+    """解析 YYYY-MM-DD 日期参数。"""
     try:
-        if not path.exists() or path.stat().st_size == 0:
-            return False
-
-        with path.open("r", encoding="utf-8") as file:
-            json.load(file)
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return False
-
-    return True
+        return datetime.strptime(value, DATE_FORMAT).date()
+    except ValueError as exc:
+        raise ValueError("日期格式应为 YYYY-MM-DD") from exc
 
 
-def write_request_cache_meta(meta_path: Path, query_date: date) -> None:
-    """记录 request.json 对应的查询日期，同一天内允许复用。"""
-    payload = {
-        "query_date": query_date.isoformat(),
-        "target_date": (query_date - timedelta(days=1)).isoformat(),
-        "request_file": REQUEST_JSON_NAME,
-    }
-    meta_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+def parse_click_query_args(message: str) -> ClickQueryArgs:
+    """从 /点击查询 命令中解析 URL 和日期区间。"""
+    args_text = parse_command_args(message, "点击查询")
+    parts = args_text.split()
+    if len(parts) != 3:
+        raise ValueError("请按格式输入：/点击查询 ln.run/miTyN 2026-07-01 2026-07-02")
 
+    url, start_text, end_text = parts
+    start_date = parse_query_date(start_text)
+    end_date = parse_query_date(end_text)
+    if start_date >= end_date:
+        raise ValueError("截止时间必须晚于起始时间")
 
-def is_request_cache_current(
-    request_path: Path,
-    meta_path: Path,
-    query_date: date,
-) -> bool:
-    """判断 request.json 是否属于今天发起的昨日查询。"""
-    try:
-        if not is_valid_json_file(request_path):
-            return False
-
-        with meta_path.open("r", encoding="utf-8") as file:
-            payload = json.load(file)
-    except (OSError, json.JSONDecodeError):
-        return False
-
-    return payload.get("query_date") == query_date.isoformat()
-
-
-def replace_downloaded_file(temp_path: Path, output_path: Path) -> None:
-    """下载完成并通过 JSON 校验后，原子替换正式缓存文件。"""
-    if not is_valid_json_file(temp_path):
-        raise RuntimeError("接口返回内容不是完整 JSON")
-
-    temp_path.replace(output_path)
+    return ClickQueryArgs(url=url, start_date=start_date, end_date=end_date)
 
 
 def parse_count(value: object) -> int:
@@ -181,31 +141,62 @@ def build_click_overview_from_payload(
     )
 
 
-async def fetch_event_log(output_path: Path) -> None:
-    """调用查询接口并保存原始 JSON，失败时保留旧缓存文件。"""
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    temp_path = output_path.with_name(f"{output_path.name}.tmp")
-    errors: list[str] = []
+def build_click_counts_from_payload(payload: dict[str, object]) -> tuple[int, int]:
+    """解析点击请求数和成功数接口响应。"""
+    if not payload.get("success", False):
+        message = payload.get("message", "查询失败")
+        raise RuntimeError(str(message))
 
-    for attempt in range(1, DOWNLOAD_RETRY_TIMES + 1):
-        try:
-            await fetch_event_log_with_aiohttp(temp_path)
-            replace_downloaded_file(temp_path, output_path)
-            return
-        except Exception as exc:
-            if is_valid_json_file(temp_path):
-                temp_path.replace(output_path)
-                return
+    data = payload.get("data", {})
+    rows = data.get("rows", []) if isinstance(data, dict) else []
+    if not isinstance(rows, list):
+        raise RuntimeError("点击查询接口返回数据格式错误")
 
-            errors.append(f"aiohttp第{attempt}次失败：{exc}")
-            temp_path.unlink(missing_ok=True)
-            if attempt < DOWNLOAD_RETRY_TIMES:
-                await asyncio.sleep(DOWNLOAD_RETRY_INTERVAL_SECONDS)
+    action_counts: dict[str, int] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
 
-    raise RuntimeError("接口查询失败：" + "；".join(errors))
+        action = str(row.get("action", ""))
+        action_counts[action] = parse_count(row.get("total", 0))
+
+    return (
+        action_counts.get("click-request", 0),
+        action_counts.get("click-success", 0),
+    )
 
 
-async def fetch_query_json(sql: str) -> dict[str, object]:
+def build_query_api_url(event_api_base_url: str) -> str:
+    """拼接打点查询接口地址。"""
+    return f"{event_api_base_url.rstrip('/')}{QUERY_API_PATH}"
+
+
+def format_day_start(day: date) -> str:
+    """格式化查询边界时间。"""
+    return f"{day.isoformat()} 00:00:00"
+
+
+def escape_sql_literal(value: str) -> str:
+    """转义 SQL 字符串字面量中的单引号。"""
+    return value.replace("'", "''")
+
+
+def build_click_count_sql(url: str, start_date: date, end_date: date) -> str:
+    """构造指定 URL 在日期区间内的请求数和成功数 SQL。"""
+    period_start = format_day_start(start_date)
+    period_end = format_day_start(end_date)
+    escaped_url = escape_sql_literal(url)
+    return (
+        "SELECT action, COUNT(*) AS total FROM event_log "
+        f"WHERE event_time >= '{period_start}' "
+        f"AND event_time < '{period_end}' "
+        "AND action IN ('click-request', 'click-success') "
+        f"AND params LIKE '%{escaped_url}%' "
+        "GROUP BY action ORDER BY action;"
+    )
+
+
+async def fetch_query_json(sql: str, event_api_base_url: str) -> dict[str, object]:
     """调用查询接口并返回 JSON 响应。"""
     try:
         import aiohttp
@@ -215,6 +206,7 @@ async def fetch_query_json(sql: str) -> dict[str, object]:
     errors: list[str] = []
     timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT_SECONDS)
     payload = {"sql": sql}
+    api_url = build_query_api_url(event_api_base_url)
 
     for attempt in range(1, DOWNLOAD_RETRY_TIMES + 1):
         try:
@@ -222,7 +214,7 @@ async def fetch_query_json(sql: str) -> dict[str, object]:
                 timeout=timeout,
                 headers=REQUEST_HEADERS,
             ) as session:
-                async with session.post(API_URL, json=payload) as response:
+                async with session.post(api_url, json=payload) as response:
                     response.raise_for_status()
                     text = await response.text()
                     parsed = json.loads(text)
@@ -238,99 +230,38 @@ async def fetch_query_json(sql: str) -> dict[str, object]:
     raise RuntimeError("接口查询失败：" + "；".join(errors))
 
 
-async def fetch_event_log_with_aiohttp(output_path: Path) -> None:
-    """用 aiohttp 下载响应，读到完整 JSON 后由上层替换缓存文件。"""
-    try:
-        import aiohttp
-    except ImportError as exc:
-        raise RuntimeError("缺少 aiohttp 依赖，请先安装 requirements.txt") from exc
-
-    timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT_SECONDS)
-    payload = {"sql": QUERY_SQL}
-
-    async with aiohttp.ClientSession(timeout=timeout, headers=REQUEST_HEADERS) as session:
-        async with session.post(API_URL, json=payload) as response:
-            response.raise_for_status()
-            with output_path.open("wb") as file:
-                async for chunk in response.content.iter_chunked(1024 * 1024):
-                    file.write(chunk)
-
-
-async def run_extract_script(
-    pattern: str,
-    input_path: Path,
-    output_path: Path,
-    script_path: Path = SCRIPT_PATH,
-) -> None:
-    """调用现有筛选脚本生成 record.csv。"""
-    process = await asyncio.create_subprocess_exec(
-        sys.executable,
-        str(script_path),
-        pattern,
-        "-i",
-        str(input_path),
-        "-o",
-        str(output_path),
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
+async def build_click_count_report(
+    url: str,
+    start_date: date,
+    end_date: date,
+    event_api_base_url: str,
+) -> ClickCountReport:
+    """查询指定 URL 在日期区间内的请求数和成功数。"""
+    payload = await fetch_query_json(
+        build_click_count_sql(url, start_date, end_date),
+        event_api_base_url,
     )
-
-    try:
-        stdout, stderr = await asyncio.wait_for(
-            process.communicate(),
-            timeout=SCRIPT_TIMEOUT_SECONDS,
-        )
-    except asyncio.TimeoutError as exc:
-        process.kill()
-        await process.communicate()
-        raise RuntimeError("筛选点击记录超时") from exc
-
-    if process.returncode != 0:
-        detail = (stderr or stdout).decode("utf-8", errors="replace").strip()
-        raise RuntimeError(f"筛选点击记录失败：{detail or '未知错误'}")
-
-
-def count_click_records(csv_path: Path) -> ClickCounts:
-    """统计筛选结果中的 click-success 和 click-fail 数量。"""
-    success = 0
-    fail = 0
-
-    with csv_path.open("r", encoding="utf-8-sig", newline="") as file:
-        reader = csv.DictReader(file)
-        for row in reader:
-            action = row.get("动作", "").strip()
-            if action == "click-success":
-                success += 1
-            elif action == "click-fail":
-                fail += 1
-
-    return ClickCounts(success=success, fail=fail)
-
-
-async def build_click_report(pattern: str, data_dir: Path) -> ClickReport:
-    """完整执行查询、保存 request.json、生成 record.csv 和统计结果。"""
-    data_dir.mkdir(parents=True, exist_ok=True)
-    request_json = data_dir / REQUEST_JSON_NAME
-    request_meta = data_dir / REQUEST_META_NAME
-    record_csv = data_dir / RECORD_CSV_NAME
-    query_date = date.today()
-
-    if not is_request_cache_current(request_json, request_meta, query_date):
-        await fetch_event_log(request_json)
-        write_request_cache_meta(request_meta, query_date)
-
-    await run_extract_script(pattern, request_json, record_csv)
-    counts = count_click_records(record_csv)
-
-    return ClickReport(
-        pattern=pattern,
-        request_json=request_json,
-        record_csv=record_csv,
-        counts=counts,
+    request_total, success_total = build_click_counts_from_payload(payload)
+    return ClickCountReport(
+        url=url,
+        period_start=format_day_start(start_date),
+        period_end=format_day_start(end_date),
+        request_total=request_total,
+        success_total=success_total,
     )
 
 
-async def build_click_overview() -> ClickOverview:
+async def build_yesterday_click_count_report(
+    url: str,
+    event_api_base_url: str,
+) -> ClickCountReport:
+    """查询指定 URL 昨日 0 点到今日 0 点的请求数和成功数。"""
+    end_date = date.today()
+    start_date = end_date - timedelta(days=1)
+    return await build_click_count_report(url, start_date, end_date, event_api_base_url)
+
+
+async def build_click_overview(event_api_base_url: str) -> ClickOverview:
     """查询昨日点击总览并整理为图片模板数据。"""
-    payload = await fetch_query_json(OVERVIEW_SQL)
+    payload = await fetch_query_json(OVERVIEW_SQL, event_api_base_url)
     return build_click_overview_from_payload(payload, date.today())
